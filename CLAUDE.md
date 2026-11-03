@@ -15,33 +15,113 @@
 ## Структура
 
 ```
-frontend/            React + Vite + TypeScript
-services/account/    Java 21, Spring Boot 4 — пользователи, счета, подписки, лимиты
-services/pricing/    Java 21, Spring Boot 4 — расчёт комиссий
-docker-compose.yml   всё приложение одной командой
-reference-*.png      макеты
+frontend/              React + Vite + TypeScript
+services/account/      пользователи, счета, подписки, лимиты, резервирование средств   :8081
+services/pricing/      расчёт комиссии и подписанная котировка                        :8082
+services/payment/      оркестратор платежей (сага)                                    :8083
+services/fraud/        заглушка антифрода (другая команда)                            :8084
+services/processing/   заглушка процессинга — движения денег (другая команда)         :8085
+infra/postgres/        init.sql — создание схем
+docker-compose.yml     всё приложение одной командой
+reference-*.png        макеты
 ```
+
+Java-сервисы: Java 21, Spring Boot 4, Maven. Каждый сервис — самостоятельный проект, общего кода нет (договариваются через API).
+
+## Платёж по СБП и по карте (сага)
+
+`POST /api/payments` (payment) — заголовки `X-User-Id` (вместо авторизации) и `X-Idempotency-Key`.
+
+1. **Котировка.** Фронтенд через 0,5 с после ввода суммы запрашивает в pricing комиссию. Pricing берёт подписку из account и возвращает расчёт и `quoteToken`: HMAC-подпись поверх `quoteId`, пользователя, счёта, вида операции, суммы, комиссии, тарифа и срока (10 минут).
+2. **Payment: подготовка.**
+   - Захватывает ключ идемпотентности (`INSERT … ON CONFLICT DO NOTHING`).
+   - Проверяет котировку локально: подпись, срок, совпадение с запросом. Каждую котировку можно использовать один раз — на `quote_id` стоит уникальный индекс.
+   - Проверяет реквизиты.
+   - Создаёт платёж `CREATED` с комиссией и тарифом.
+3. **Account: резерв.** Одна транзакция:
+   - `SELECT FOR UPDATE` пользователя и счёта;
+   - проверка владельца, статуса и валюты счёта;
+   - лимиты на операцию, день и месяц;
+   - резерв на сумму вместе с комиссией;
+   - событие в outbox.
+
+   Бизнес-отказ (нет денег, лимит) → `FAILED`, откатывать нечего.
+4. **Fraud.** `REJECTED` или таймаут → `COMPENSATING`: снимаем резерв, затем `FAILED`.
+5. **Processing.** Перед вызовом ставим `SENT_TO_PROCESSING`.
+   - `DECLINED` → снимаем резерв.
+   - Таймаут → спрашиваем статус перевода в processing.
+   - Статус неизвестен → платёж ждёт `RecoveryJob`.
+6. **Подтверждение.** `CONFIRMING` → account переводит резерв в списание, баланс уменьшается → `SUCCESS`. В outbox уходит событие `PaymentSucceeded` или `PaymentFailed`.
+
+Ответ: `200` — платёж завершён (`SUCCESS` или `FAILED`), `202` — ещё идёт; фронтенд опрашивает `GET /api/payments/{id}`. Повтор с тем же ключом возвращает тот же платёж, без второго списания.
+
+**RecoveryJob** (payment, раз в 10 с) дожимает зависшие платежи. Все вызовы account и processing идемпотентны по `paymentId`, поэтому их можно повторять:
+- `CONFIRMING` → повторить списание;
+- `COMPENSATING` → повторить снятие резерва;
+- `SENT_TO_PROCESSING` дольше 30 с → спросить статус в processing;
+- `CREATED`, `RESERVED` или `FRAUD_APPROVED` дольше 60 с → отменить.
+
+### Тестовые суммы
+
+Заглушки отвечают случайно: антифрод одобряет ~90%, процессинг проводит ~90%. Чтобы получить нужный сценарий, укажите копейки в сумме:
+
+| Копейки | Что произойдёт |
+|---|---|
+| `.66` | антифрод отклоняет |
+| `.77` | антифрод не отвечает (таймаут) |
+| `.88` | процессинг отклоняет |
+| `.99` | процессинг отвечает дольше таймаута, payment узнаёт результат запросом статуса → успех |
+
+Лимиты (одинаковые у всех): СБП — 50 000 на операцию, 100 000 в день, 300 000 в месяц; по карте — 30 000 / 100 000 / 300 000.
+
+### Тестовые пользователи
+
+| Пользователь | Телефон | Подписка | Счета |
+|---|---|---|---|
+| Артур Р (фронтенд работает от его имени) | +7 996 448 00 00 | NONE | кошелёк 100 000; карта `2200 7001 2347 3752` — 100 000 |
+| Мария Иванова | +7 916 123 45 67 | PREMIUM | кошелёк 50 000; карта `2200 3004 5678 1002` — 75 000 |
+| Иван Петров | +7 903 111 22 33 | PREMIUM_PLUS | кошелёк 20 000; карта `2202 2009 8765 1005` — 300 000 |
+| Ольга Смирнова | +7 925 765 43 21 | NONE | только кошелёк, 5 000 |
+
+Деньги получателю не зачисляются: это работа процессинга, а он пока заглушка. Внутренние переводы между нашими клиентами — отдельная задача.
 
 ## База данных
 
-Пока одна общая Postgres (`payments`), у каждого сервиса **своя схема**: `account`, `pricing`. Сервис ходит только в свою схему; чужие данные получает через REST другого сервиса. Позже разнесём по отдельным базам.
+Одна Postgres (`payments`), у каждого сервиса **своя схема**: `account`, `pricing`, `payment`. Схемы создаёт `infra/postgres/init.sql` при первом запуске тома. Сервис ходит только в свою схему (её задаёт `spring.datasource.hikari.schema`), чужие данные получает через REST. Позже разнесём по отдельным базам.
 
-Миграции — Flyway, лежат в `services/<сервис>/src/main/resources/db/migration`. Hibernate только проверяет схему (`ddl-auto: validate`), таблицы создаются миграциями.
+Миграции — **Liquibase**, SQL-файлы в `services/<сервис>/src/main/resources/db/changelog/`. Hibernate только проверяет схему (`ddl-auto: validate`).
 
-- `account.users` — пользователь и его подписка (`NONE`, `PREMIUM`, `PREMIUM_PLUS`).
-- `account.accounts` — счета: `WALLET` («Мой кошелёк», ровно один у каждого) и `CARD` (у тех, кто оформил карту).
-- `account.limits` — лимиты на операции (структура есть, правила добавим позже).
-- `pricing.commission_rules` — процент комиссии для пары «вид операции × подписка».
+- `account.users` — пользователь и подписка (`NONE`, `PREMIUM`, `PREMIUM_PLUS`).
+- `account.accounts` — счета: `WALLET` (ровно один у каждого) и `CARD`. `balance` — реальные деньги, `reserved` — заблокированные под платежи в процессе; доступно = `balance − reserved`.
+- `account.limits` — лимиты: вид операции × период (`SINGLE`, `DAY`, `MONTH`).
+- `account.reservations` — резервы под платежи (`RESERVED` → `CAPTURED` / `RELEASED`). Израсходованный лимит считается по ним, снятые резервы не считаются.
+- `pricing.commission_rules` — процент комиссии для пары «вид операции × подписка»; `id` — тариф.
+- `payment.payments` — платежи и их статус; номер карты получателя хранится только маской.
+- `payment.payment_status_history` — каждый шаг саги с пояснением.
+- `payment.idempotency_keys` — ключи идемпотентности.
+- `account.outbox`, `payment.outbox` — события до отправки в Kafka.
+
+## Kafka
+
+Сервисы пишут события в outbox в той же транзакции, что и данные. Планировщик раз в секунду публикует их в Kafka (`SKIP LOCKED`, гарантия «хотя бы один раз»).
+
+- `account.reservations` — `FundsReserved`, `FundsReleased`, `FundsCaptured`
+- `payment.events` — `PaymentSucceeded`, `PaymentFailed`
+
+Подписчиков пока нет. Смотреть сообщения: Kafka UI на http://localhost:8090. С компьютера Kafka доступна на `localhost:29092`.
 
 ## API
 
-- account `:8081`
-  - `GET /api/users/{userId}` — профиль, подписка и счета
-  - `GET /api/users/{userId}/accounts` — счета
-- pricing `:8082`
-  - `POST /api/pricing/commission` `{userId, operationType, amount}` → `{commission, percent, total, subscription, …}`. Подписку берёт из account по REST. `operationType`: `PHONE_TRANSFER`, `CARD_TRANSFER`, `OWN_TRANSFER`.
+- account
+  - `GET /api/users/{userId}` — профиль, подписка, счета
+  - `GET /api/users/{userId}/accounts` — счета (`balance`, `available`)
+  - `POST /api/internal/reservations` — зарезервировать; `POST /api/internal/reservations/{paymentId}/capture` и `…/release`
+- pricing — `POST /api/pricing/commission` `{userId, sourceAccountId, operationType, amount}` → комиссия + `quoteToken`. `operationType`: `SBP_PHONE`, `CARD2CARD`, `OWN_TRANSFER`.
+- payment — `POST /api/payments`, `GET /api/payments/{id}`
+- fraud — `POST /api/fraud/check`
+- processing — `POST /api/processing/transfers`, `GET /api/processing/transfers/{paymentId}`
 
-Фронтенд ходит в сервисы через прокси Vite (`/api/users` → account, `/api/pricing` → pricing). Авторизации пока нет: фронтенд работает от имени демо-пользователя `00000000-0000-0000-0000-000000000001` (сид в миграции account).
+Фронтенд ходит в сервисы через прокси Vite (`/api/users`, `/api/pricing`, `/api/payments`). Авторизации пока нет: фронтенд работает от имени `00000000-0000-0000-0000-000000000001`.
 
 ## Запуск
 
@@ -49,18 +129,23 @@ Java и Node на компьютер ставить не нужно — всё �
 
 ```bash
 docker compose up -d --build   # поднять всё
-docker compose logs -f pricing # логи сервиса
+docker compose logs -f payment # логи сервиса
 docker compose down            # остановить (данные БД сохраняются в volume)
-docker compose down -v         # остановить и стереть БД
+docker compose down -v         # остановить и стереть БД (пересоздастся из миграций)
 ```
 
-Postgres доступна с компьютера на `localhost:5433` (`payments` / `payments`).
+Postgres с компьютера: `localhost:5433`, база `payments`, `payments` / `payments`.
 
 После изменения `package.json` — `docker compose up -d --build --renew-anon-volumes web`.
 
 ## Страницы
 
-- `/` — Платежи и переводы. Переключатель «Платежи / Переводы» на этой же странице (`/?tab=transfers`).
-- `/transfers/phone`, `/transfers/card`, `/transfers/own` — формы переводов. Через 0,5 с после ввода суммы фронтенд запрашивает комиссию в pricing и показывает итог. Сам перевод пока не выполняется: показываем экран «Перевод отправлен», балансы не меняются.
-- `/history` — История операций (пока моковая).
-- Навигация — в шапке сверху.
+- `/` — Платежи и переводы. Переключатель «Платежи / Переводы» (`/?tab=transfers`).
+- `/transfers/phone`, `/transfers/card` — переводы по СБП и по карте, проходят через сагу.
+- `/transfers/own` — между своими счетами: комиссия считается, сам перевод пока моковый.
+- `/history` — история операций (пока моковая).
+
+## Известные упрощения
+
+- Если запрос резервирования дошёл до account уже после того, как payment по таймауту снял резерв, резерв останется висеть. Лечится «надгробием» в account — записью о снятии до прихода резерва.
+- Заглушка процессинга хранит результаты в памяти: после её перезапуска запрос статуса не найдёт старые переводы.

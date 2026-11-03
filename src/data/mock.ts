@@ -4,6 +4,16 @@ export const wallet = { title: 'Мой кошелёк: +7 996 448…', balance: 
 
 export const card = { title: 'Зарплатная WEEKEND ·· 3752', last4: '3752', balance: 183 }
 
+export type Account = { id: string; kind: 'card' | 'wallet'; title: string; balance: number }
+
+// Источники списания и зачисления для форм переводов
+export const accounts: Account[] = [
+  { id: 'card-3752', kind: 'card', title: 'Зарплатная WEEKEND ·· 3752', balance: card.balance },
+  { id: 'wallet', kind: 'wallet', title: 'Мой кошелёк', balance: wallet.balance },
+]
+
+export const banks = ['Сбербанк', 'Т-Банк', 'Альфа-Банк', 'ВТБ', 'Газпромбанк', 'Райффайзенбанк', 'МТС Банк', 'Озон Банк']
+
 export const templates = [{ id: 'yota', name: 'Yota', color: '#3fb6e8' }]
 
 export const paymentCategories = [
@@ -28,9 +38,9 @@ export const paymentCategories = [
 ] as const
 
 export const transferTypes = [
-  { id: 'phone', title: 'По номеру телефона', icon: 'Phone' },
-  { id: 'card', title: 'По номеру карты', icon: 'CreditCard' },
-  { id: 'own', title: 'Между своими счетами', icon: 'ArrowLeftRight' },
+  { id: 'phone', title: 'По номеру телефона', icon: 'Phone', to: '/transfers/phone' },
+  { id: 'card', title: 'По номеру карты', icon: 'CreditCard', to: '/transfers/card' },
+  { id: 'own', title: 'Между своими счетами', icon: 'ArrowLeftRight', to: '/transfers/own' },
   { id: 'abroad', title: 'За рубеж', icon: 'Globe' },
   { id: 'requisites', title: 'По реквизитам', icon: 'File' },
   { id: 'wallet', title: 'На кошелек', icon: 'Wallet' },

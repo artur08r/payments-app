@@ -1,5 +1,5 @@
 import { Check, Search } from 'lucide-react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import Icon from '../components/Icon'
 import InfoBlock from '../components/InfoBlock'
 import { paymentCategories, templates, transferTypes } from '../data/mock'
@@ -8,6 +8,7 @@ type Tab = 'payments' | 'transfers'
 
 export default function PaymentsPage() {
   const [params, setParams] = useSearchParams()
+  const navigate = useNavigate()
   const tab: Tab = params.get('tab') === 'transfers' ? 'transfers' : 'payments'
   const setTab = (t: Tab) => setParams(t === 'payments' ? {} : { tab: t })
 
@@ -51,7 +52,7 @@ export default function PaymentsPage() {
 
       <div className="tiles">
         {(tab === 'payments' ? paymentCategories : transferTypes).map((item) => (
-          <button key={item.id} className="tile">
+          <button key={item.id} className="tile" onClick={() => 'to' in item && navigate(item.to)}>
             <span className="round-icon"><Icon name={item.icon} /></span>
             <span>{item.title}</span>
           </button>

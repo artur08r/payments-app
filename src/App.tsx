@@ -3,6 +3,9 @@ import Header from './components/Header'
 import Sidebar from './components/Sidebar'
 import PaymentsPage from './pages/PaymentsPage'
 import HistoryPage from './pages/HistoryPage'
+import PhoneTransferPage from './pages/transfers/PhoneTransferPage'
+import CardTransferPage from './pages/transfers/CardTransferPage'
+import OwnTransferPage from './pages/transfers/OwnTransferPage'
 
 export default function App() {
   return (
@@ -13,6 +16,9 @@ export default function App() {
         <main className="content">
           <Routes>
             <Route path="/" element={<PaymentsPage />} />
+            <Route path="/transfers/phone" element={<PhoneTransferPage />} />
+            <Route path="/transfers/card" element={<CardTransferPage />} />
+            <Route path="/transfers/own" element={<OwnTransferPage />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

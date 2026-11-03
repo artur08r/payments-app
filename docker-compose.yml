@@ -97,6 +97,19 @@ services:
       kafka:
         condition: service_healthy
 
+  history:
+    build: services/history
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/payments
+      KAFKA_BOOTSTRAP: kafka:9092
+    ports:
+      - "8086:8086"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
   fraud:
     build: services/fraud
     ports:
@@ -113,6 +126,7 @@ services:
       ACCOUNT_URL: http://account:8081
       PRICING_URL: http://pricing:8082
       PAYMENT_URL: http://payment:8083
+      HISTORY_URL: http://history:8086
     ports:
       - "5173:5173"
     volumes:

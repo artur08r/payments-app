@@ -1,8 +1,54 @@
+# Всё приложение локально: общая база Postgres, сервисы account и pricing, фронтенд
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: payments
+      POSTGRES_USER: payments
+      POSTGRES_PASSWORD: payments
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payments -d payments"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  account:
+    build: services/account
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/payments
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  pricing:
+    build: services/pricing
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/payments
+      ACCOUNT_URL: http://account:8081
+    ports:
+      - "8082:8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      account:
+        condition: service_started
+
   web:
-    build: .
+    build: frontend
+    environment:
+      ACCOUNT_URL: http://account:8081
+      PRICING_URL: http://pricing:8082
     ports:
       - "5173:5173"
     volumes:
-      - .:/app
+      - ./frontend:/app
       - /app/node_modules
+
+volumes:
+  pgdata:

@@ -126,6 +126,21 @@ services:
       postgres:
         condition: service_healthy
 
+  # Шаблоны платежей и автоплатежи: хранит их и по расписанию создаёт платежи в payment
+  autopayments:
+    build: services/autopayments
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/payments
+      ACCOUNT_URL: http://account:8081
+      PRICING_URL: http://pricing:8082
+      PAYMENT_URL: http://payment:8083
+      BILLER_URL: http://biller:8087
+    ports:
+      - "8089:8089"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # Заглушки сторонних поставщиков: ГИС ГМП (госуслуги) и другие
   providers:
     build: services/providers
@@ -150,6 +165,7 @@ services:
       PAYMENT_URL: http://payment:8083
       HISTORY_URL: http://history:8086
       BILLER_URL: http://biller:8087
+      AUTOPAYMENTS_URL: http://autopayments:8089
     ports:
       - "5173:5173"
     volumes:

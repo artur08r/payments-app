@@ -111,16 +111,24 @@ services:
       kafka:
         condition: service_healthy
 
-  # Справочники поставщиков: страны и способы переводов за рубеж
+  # Справочники поставщиков: страны и способы переводов за рубеж, госуслуги
   biller:
     build: services/biller
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/payments
+      GIS_GMP_URL: http://providers:8088
+      KAFKA_BOOTSTRAP: kafka:9092
     ports:
       - "8087:8087"
     depends_on:
       postgres:
         condition: service_healthy
+
+  # Заглушки сторонних поставщиков: ГИС ГМП (госуслуги) и другие
+  providers:
+    build: services/providers
+    ports:
+      - "8088:8088"
 
   fraud:
     build: services/fraud

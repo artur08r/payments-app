@@ -74,6 +74,7 @@ services:
       <<: *quote-secret
       DB_URL: jdbc:postgresql://postgres:5432/payments
       ACCOUNT_URL: http://account:8081
+      BILLER_URL: http://biller:8087
     ports:
       - "8082:8082"
     depends_on:
@@ -117,6 +118,7 @@ services:
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/payments
       GIS_GMP_URL: http://providers:8088
+      GATEWAY_URL: http://providers:8088
       KAFKA_BOOTSTRAP: kafka:9092
     ports:
       - "8087:8087"

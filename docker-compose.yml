@@ -119,6 +119,7 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/payments
       GIS_GMP_URL: http://providers:8088
       GATEWAY_URL: http://providers:8088
+      PROCESSING_URL: http://processing:8085
       KAFKA_BOOTSTRAP: kafka:9092
     ports:
       - "8087:8087"

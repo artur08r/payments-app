@@ -25,12 +25,26 @@ services/history/      история операций всех пользова
 services/biller/       справочники и интеграции с поставщиками: страны и способы переводов за рубеж, госуслуги (ГИС ГМП)  :8087
 services/providers/    заглушки сторонних поставщиков (ГИС ГМП — начисления по УИН, СТС/ВУ, ИНН, паспорту)  :8088
 services/autopayments/ шаблоны платежей и автоплатежи (планировщик сам создаёт платежи в payment)  :8089
+libs/platform/         общая инфраструктура сервисов (Spring Boot автоконфигурация, см. ниже)
 infra/postgres/        init.sql — создание схем
 docker-compose.yml     всё приложение одной командой
 reference-*.png        макеты
 ```
 
-Java-сервисы: Java 21, Spring Boot 4, Maven. Каждый сервис — самостоятельный проект, общего кода нет (договариваются через API).
+Java-сервисы: Java 21, Spring Boot 4, Maven. Каждый сервис — самостоятельный проект; доменный код не делим (договариваются через API), общая только инфраструктура — `libs/platform`.
+
+### libs/platform
+
+Подключается зависимостью `com.paymentsapp:platform`, включается автоконфигурацией. Docker собирает сервисы из корня репозитория: сначала `mvn install` библиотеки, потом сервис (`services/<сервис>/Dockerfile`, контекст `.` в compose, `.dockerignore` в корне).
+- **Outbox** (`platform.outbox.enabled: true` — account, payment): запись события в транзакции (`Outbox.add`), публикация в Kafka (`FOR UPDATE SKIP LOCKED`, интервал `platform.outbox.publish-interval`), очистка отправленных старше `retention` пачками (ShedLock).
+- **DLT для Kafka**: консьюмер не смог обработать сообщение — 3 повтора с паузой 1 → 2 → 4 с, затем в топик `<топик>-dlt` (`platform.kafka.dead-letter.*`); битый JSON — сразу в DLT.
+- **Время**: бины `Clock` и `ZoneId` из `platform.time.zone` (Europe/Moscow). В коде не вызываем `now()` без `Clock`.
+- **Доменные ошибки**: enum кода ошибки реализует `ErrorCode` (статус + шаблон текста), бросаем `DomainException`, ответ — ProblemDetail с полем `code`.
+- **Хэши**: `Hashing.sha256Hex`, `Hashing.hmacSha256Hex`.
+- **ShedLock** в Redis (у сервисов со `spring-boot-starter-data-redis`): `@SchedulerLock` на задаче — при нескольких подах её выполняет один. Сейчас: `payment-recovery`, `charity-settlement`, `autopayments-tick`, `outbox-cleanup`.
+- **ResilientCalls** (у сервисов с `resilience4j-spring-boot4`): вызов соседа через bulkhead → circuit breaker → retry, настройки — `resilience4j.*` в `application.yml`; открытый circuit breaker → `ServiceUnavailableException` (наследник `RestClientException`). `ConnectFailure` — предикат «повторять, только если не удалось соединиться».
+
+Тайм-ауты HTTP-клиентов по умолчанию — `spring.http.clients.connect-timeout` / `read-timeout` (1 с / 5 с).
 
 ## Платёж по СБП и по карте (сага)
 
@@ -145,7 +159,7 @@ Java-сервисы: Java 21, Spring Boot 4, Maven. Каждый сервис �
 
 Миграции — **Liquibase**, SQL-файлы в `services/<сервис>/src/main/resources/db/changelog/`. Hibernate только проверяет схему (`ddl-auto: validate`).
 
-- `account.users` — пользователь, телефон, подписка (`NONE`, `PREMIUM`, `PREMIUM_PLUS`), `sbp_default_bank_id` — банк по умолчанию для входящих СБП, `default_payment_account_id` — инструмент оплаты по умолчанию, `identification_level` — идентификация владельца кошелька.
+- `account.users` — пользователь, телефон, подписка (`NONE`, `PREMIUM`, `BANK_PREMIUM`), `sbp_default_bank_id` — банк по умолчанию для входящих СБП, `default_payment_account_id` — инструмент оплаты по умолчанию, `identification_level` — идентификация владельца кошелька.
 - `account.accounts` — счета: `WALLET` (ровно один у каждого), `CARD` (наш банк) и `EXTERNAL_CARD` (привязанная карта другого банка: `card_last4`, `card_expiry`, `card_fingerprint`); `is_default` — карта для входящих переводов (одна на пользователя). `balance` — реальные деньги, `reserved` — заблокированные под платежи в процессе; доступно = `balance − reserved`.
 - `account.limits` — лимиты пользователя: вид операции × период (`SINGLE`, `DAY`, `MONTH`).
 - `account.account_limits` — лимиты счёта: `max_payment`, `max_balance`, `max_monthly_turnover` (`NULL` — без ограничения).
@@ -163,7 +177,9 @@ Java-сервисы: Java 21, Spring Boot 4, Maven. Каждый сервис �
 
 ## Kafka
 
-Сервисы пишут события в outbox в той же транзакции, что и данные. Планировщик раз в секунду публикует их в Kafka (`SKIP LOCKED`, гарантия «хотя бы один раз»).
+Сервисы пишут события в outbox в той же транзакции, что и данные. Планировщик раз в секунду публикует их в Kafka (`SKIP LOCKED`, гарантия «хотя бы один раз»). Имена топиков, партиции и реплики — в `application.yml` (`messaging.*`), у всех топиков 3 партиции, консьюмеры читают в 3 потока (`spring.kafka.listener.concurrency`). Данные Kafka — в томе `kafkadata`. Не обработанное после повторов сообщение — в `payment.events-dlt`.
+
+Redis (`localhost:6379`) — блокировки планировщиков, позже кэш.
 
 - `account.reservations` — `FundsReserved`, `FundsReleased`, `FundsCaptured`
 - `payment.events` — `PaymentSucceeded`, `PaymentFailed`
@@ -230,6 +246,7 @@ Postgres с компьютера: `localhost:5433`, база `payments`, `paymen
 
 - Если запрос резервирования дошёл до account уже после того, как payment по таймауту снял резерв, резерв останется висеть. Лечится «надгробием» в account — записью о снятии до прихода резерва.
 - Заглушка процессинга хранит результаты в памяти: после её перезапуска запрос статуса не найдёт старые переводы.
+- Все сервисы ходят в Postgres одним пользователем `payments`; в идеале — своя база на сервис, пока не делаем из-за ресурсов.
 
 ## Переводы за рубеж (`ABROAD`)
 

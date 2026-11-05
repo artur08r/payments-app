@@ -4,6 +4,7 @@ x-quote-secret: &quote-secret
 
 services:
   postgres:
+    restart: unless-stopped
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: payments
@@ -21,6 +22,7 @@ services:
       retries: 30
 
   kafka:
+    restart: unless-stopped
     image: apache/kafka:4.3.2
     environment:
       KAFKA_NODE_ID: 1
@@ -35,6 +37,12 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Топик, созданный автоматически (консьюмер подписался раньше, чем продюсер его объявил, или DLT), —
+      # сразу с тремя партициями, как объявленные
+      KAFKA_NUM_PARTITIONS: 3
+    # Сообщения переживают перезапуск Docker: без тома события пропадали
+    volumes:
+      - kafkadata:/var/lib/kafka/data
     ports:
       - "29092:29092"
     healthcheck:
@@ -44,7 +52,20 @@ services:
       retries: 30
 
   # Веб-интерфейс для просмотра топиков и сообщений: http://localhost:8090
+  # Кэш и блокировки планировщиков (ShedLock)
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   kafka-ui:
+    restart: unless-stopped
     image: kafbat/kafka-ui:v1.5.0
     environment:
       KAFKA_CLUSTERS_0_NAME: local
@@ -56,20 +77,29 @@ services:
         condition: service_healthy
 
   account:
-    build: services/account
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/account/Dockerfile
     environment:
+      REDIS_HOST: redis
       DB_URL: jdbc:postgresql://postgres:5432/payments
       KAFKA_BOOTSTRAP: kafka:9092
     ports:
       - "8081:8081"
     depends_on:
+      redis:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       kafka:
         condition: service_healthy
 
   pricing:
-    build: services/pricing
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/pricing/Dockerfile
     environment:
       <<: *quote-secret
       DB_URL: jdbc:postgresql://postgres:5432/payments
@@ -82,8 +112,12 @@ services:
         condition: service_healthy
 
   payment:
-    build: services/payment
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/payment/Dockerfile
     environment:
+      REDIS_HOST: redis
       <<: *quote-secret
       DB_URL: jdbc:postgresql://postgres:5432/payments
       KAFKA_BOOTSTRAP: kafka:9092
@@ -94,13 +128,18 @@ services:
     ports:
       - "8083:8083"
     depends_on:
+      redis:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       kafka:
         condition: service_healthy
 
   history:
-    build: services/history
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/history/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/payments
       KAFKA_BOOTSTRAP: kafka:9092
@@ -114,8 +153,12 @@ services:
 
   # Справочники поставщиков: страны и способы переводов за рубеж, госуслуги
   biller:
-    build: services/biller
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/biller/Dockerfile
     environment:
+      REDIS_HOST: redis
       DB_URL: jdbc:postgresql://postgres:5432/payments
       GIS_GMP_URL: http://providers:8088
       GATEWAY_URL: http://providers:8088
@@ -124,13 +167,19 @@ services:
     ports:
       - "8087:8087"
     depends_on:
+      redis:
+        condition: service_healthy
       postgres:
         condition: service_healthy
 
   # Шаблоны платежей и автоплатежи: хранит их и по расписанию создаёт платежи в payment
   autopayments:
-    build: services/autopayments
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/autopayments/Dockerfile
     environment:
+      REDIS_HOST: redis
       DB_URL: jdbc:postgresql://postgres:5432/payments
       ACCOUNT_URL: http://account:8081
       PRICING_URL: http://pricing:8082
@@ -139,26 +188,38 @@ services:
     ports:
       - "8089:8089"
     depends_on:
+      redis:
+        condition: service_healthy
       postgres:
         condition: service_healthy
 
   # Заглушки сторонних поставщиков: ГИС ГМП (госуслуги) и другие
   providers:
-    build: services/providers
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/providers/Dockerfile
     ports:
       - "8088:8088"
 
   fraud:
-    build: services/fraud
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/fraud/Dockerfile
     ports:
       - "8084:8084"
 
   processing:
-    build: services/processing
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/processing/Dockerfile
     ports:
       - "8085:8085"
 
   web:
+    restart: unless-stopped
     build: frontend
     environment:
       ACCOUNT_URL: http://account:8081
@@ -175,3 +236,4 @@ services:
 
 volumes:
   pgdata:
+  kafkadata:

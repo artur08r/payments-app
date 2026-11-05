@@ -44,7 +44,18 @@ Java-сервисы: Java 21, Spring Boot 4, Maven. Каждый сервис �
 - **ShedLock** в Redis (у сервисов со `spring-boot-starter-data-redis`): `@SchedulerLock` на задаче — при нескольких подах её выполняет один. Сейчас: `payment-recovery`, `charity-settlement`, `outbox-cleanup`. Планировщик autopayments работу не блокирует, а делит: каждый под бронирует свою пачку (`FOR UPDATE SKIP LOCKED` + `claimed_until`).
 - **ResilientCalls** (у сервисов с `resilience4j-spring-boot4`): вызов соседа через bulkhead → circuit breaker → retry, настройки — `resilience4j.*` в `application.yml`; открытый circuit breaker → `ServiceUnavailableException` (наследник `RestClientException`). `ConnectFailure` — предикат «повторять, только если не удалось соединиться».
 
+- **Кэш** (`platform.cache.enabled: true`): `@Cacheable` поверх Redis, TTL — `platform.cache.ttl.<кэш>`, префикс ключей `<сервис>:<version>:<кэш>:`; сбой Redis — запрос идёт мимо кэша.
+- **IdempotentResults**: итог операции по ключу идемпотентности в Redis (`SET NX` + TTL) — для заглушек внешних систем.
+- **Swagger** (у сервисов со springdoc): заголовок — имя сервиса, описание — `platform.openapi.description`; у каждой операции ответы `4XX`/`5XX` в формате ProblemDetail, в схеме `Problem` — все коды из enum ошибок сервиса (`platform.openapi.error-codes`).
+
 Тайм-ауты HTTP-клиентов по умолчанию — `spring.http.clients.connect-timeout` / `read-timeout` (1 с / 5 с).
+
+### Здоровье и Swagger
+
+- У каждого сервиса Actuator: `/actuator/health/liveness` (процесс жив) и `/actuator/health/readiness` (готов: на месте его БД и Redis — `management.endpoint.health.group.readiness.include`). По readiness — healthcheck в compose (`docker compose ps` показывает `healthy`), потом — пробы Kubernetes. Остановка плавная (по умолчанию в Spring Boot): новые запросы не принимаем, текущие дорабатывают.
+- Swagger UI — `http://localhost:<порт>/swagger-ui.html`, спецификация — `/v3/api-docs`. У account две группы: «Публичный API» и «Для сервисов» (`/api/internal/**`). Выключить (прод) — `SWAGGER_ENABLED=false`.
+- Redis недоступен — отказ за 1–2 с (`spring.data.redis.connect-timeout` / `timeout`): кэш идёт мимо, readiness — DOWN, liveness — UP.
+- compose: autopayments стартует, когда готовы account, pricing, payment и biller (`depends_on: service_healthy`). Образы собираются параллельно с общим кэшем `~/.m2` — в Dockerfile включены файловые блокировки Maven (`MAVEN_ARGS`).
 
 ## Платёж по СБП и по карте (сага)
 

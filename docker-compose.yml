@@ -205,8 +205,13 @@ services:
     build:
       context: .
       dockerfile: services/providers/Dockerfile
+    environment:
+      REDIS_HOST: redis
     ports:
       - "8088:8088"
+    depends_on:
+      redis:
+        condition: service_healthy
 
   fraud:
     restart: unless-stopped
@@ -221,8 +226,13 @@ services:
     build:
       context: .
       dockerfile: services/processing/Dockerfile
+    environment:
+      REDIS_HOST: redis
     ports:
       - "8085:8085"
+    depends_on:
+      redis:
+        condition: service_healthy
 
   web:
     restart: unless-stopped

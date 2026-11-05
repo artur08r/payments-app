@@ -90,9 +90,7 @@ services:
       context: .
       dockerfile: services/account/Dockerfile
     environment:
-      REDIS_HOST: redis
       DB_URL: jdbc:postgresql://postgres:5432/payments
-      KAFKA_BOOTSTRAP: kafka:9092
       CARD_HMAC_KEY: ${CARD_HMAC_KEY:?задайте CARD_HMAC_KEY в .env, см. .env.example}
       CARD_ENCRYPTION_KEY: ${CARD_ENCRYPTION_KEY:?задайте CARD_ENCRYPTION_KEY в .env, см. .env.example}
     ports:
@@ -101,11 +99,7 @@ services:
       <<: *app-health
       test: ["CMD", "curl", "-fsS", "http://localhost:8081/actuator/health/readiness"]
     depends_on:
-      redis:
-        condition: service_healthy
       postgres:
-        condition: service_healthy
-      kafka:
         condition: service_healthy
 
   pricing:
@@ -268,6 +262,8 @@ services:
       dockerfile: services/processing/Dockerfile
     environment:
       REDIS_HOST: redis
+      # Итоги долгих переводов и входящие СБП процессинг присылает в payment
+      PAYMENT_URL: http://payment:8083
     ports:
       - "8085:8085"
     healthcheck:

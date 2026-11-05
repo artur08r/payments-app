@@ -1,6 +1,7 @@
 # Всё приложение локально: Postgres, Kafka, микросервисы и фронтенд
 x-quote-secret: &quote-secret
-  QUOTE_SECRET: local-dev-quote-secret-change-me
+  # Секреты — из .env (шаблон — .env.example); без них compose не запустится
+  QUOTE_SECRET: ${QUOTE_SECRET:?задайте QUOTE_SECRET в .env, см. .env.example}
 
 services:
   postgres:
@@ -85,6 +86,8 @@ services:
       REDIS_HOST: redis
       DB_URL: jdbc:postgresql://postgres:5432/payments
       KAFKA_BOOTSTRAP: kafka:9092
+      CARD_HMAC_KEY: ${CARD_HMAC_KEY:?задайте CARD_HMAC_KEY в .env, см. .env.example}
+      CARD_ENCRYPTION_KEY: ${CARD_ENCRYPTION_KEY:?задайте CARD_ENCRYPTION_KEY в .env, см. .env.example}
     ports:
       - "8081:8081"
     depends_on:

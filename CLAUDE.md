@@ -88,7 +88,8 @@ Java-сервисы: Java 21, Spring Boot 4, Maven. Каждый сервис �
 
 ### Привязанные карты и инструмент оплаты по умолчанию
 
-- **Привязанная карта другого банка** (`accounts.type = EXTERNAL_CARD`) — только источник списания. Баланс нам неизвестен (`balance`/`available` = `null`), деньги списывает процессинг. Храним последние 4 цифры, срок, платёжную систему (по первой цифре) и SHA-256 номера (чтобы не привязать одну карту дважды); CVC проверяем на формат и никуда не сохраняем. Карту нашего банка привязать нельзя, максимум 5 привязанных карт. «Удалить» отвязывает карту: строка не удаляется (на неё ссылаются резервы и платежи), а получает `status = CLOSED` — такие счета не показываются и не используются; ту же карту можно привязать снова. Если карта была инструментом оплаты по умолчанию, сердечко сбрасывается. Лимиты: платёж до 100 000, 300 000 в месяц. Зачислять на неё можно только себе (перевод между своими через процессинг); по СБП с неё переводить нельзя (тарифа нет).
+- **Номера карт.** Открыто не храним: у наших карт — `card_number_hash` (HMAC-SHA256 с ключом `CARD_HMAC_KEY`, по нему ищем получателя и проверяем «наша ли карта») и `card_number_encrypted` (AES-256-GCM, ключ `CARD_ENCRYPTION_KEY`). Старые открытые номера при старте шифрует `CardNumberMigration`. Ключи — в `.env`.
+- **Привязанная карта другого банка** (`accounts.type = EXTERNAL_CARD`) — только источник списания. Баланс нам неизвестен (`balance`/`available` = `null`), деньги списывает процессинг. Храним последние 4 цифры, срок, платёжную систему (по первой цифре) и HMAC номера (чтобы не привязать одну карту дважды; у карт, привязанных до перехода на HMAC, остался старый SHA-256 — их можно привязать повторно); CVC проверяем на формат и никуда не сохраняем. Карту нашего банка привязать нельзя, максимум 5 привязанных карт. «Удалить» отвязывает карту: строка не удаляется (на неё ссылаются резервы и платежи), а получает `status = CLOSED` — такие счета не показываются и не используются; ту же карту можно привязать снова. Если карта была инструментом оплаты по умолчанию, сердечко сбрасывается. Лимиты: платёж до 100 000, 300 000 в месяц. Зачислять на неё можно только себе (перевод между своими через процессинг); по СБП с неё переводить нельзя (тарифа нет).
 - **Инструмент оплаты по умолчанию** («сердечко», `users.default_payment_account_id`) — любой свой счёт, подставляется в «Списать с» во всех переводах. Не путать с картой по умолчанию для входящих переводов (`accounts.is_default`). Если сердечко не выставлено — первая карта нашего банка.
 
 **RecoveryJob** (payment, раз в 10 с) дожимает зависшие платежи. Все вызовы account и processing идемпотентны по `paymentId`, поэтому их можно повторять:
@@ -110,15 +111,16 @@ Java-сервисы: Java 21, Spring Boot 4, Maven. Каждый сервис �
 
 Правила лимитов и тарифов взяты из документов «Памятка об электронных денежных средствах», «Переводы за рубеж» и «Тарифы на переводы»; их наша версия — `frontend/src/data/documents.ts` (страницы `/docs/emoney`, `/docs/abroad`, `/docs/tariffs`, ссылки — в блоке «Информация об оказываемых услугах» внизу главной). **Поменяли лимит или тариф — поправьте и документ.**
 
-Лимиты (account, проверяются при резерве):
-- **на вид операции** (`account.limits`): СБП, по номеру карты, по реквизитам — от 10 ₽, до 1 000 000 ₽ за операцию и 3 000 000 ₽ в месяц;
-- **за рубеж** (`ReservationService`): с кошелька (без открытия счёта) — 300 000 ₽ за операцию и 400 000 ₽ в месяц, с карт (со счёта) — 400 000 ₽ и 3 000 000 ₽;
-- **счёта**: «Мой кошелёк» — по уровню идентификации владельца (`IdentificationLevel`); карты — `account.account_limits` (платёж до 1 000 000, остаток без ограничения, 3 000 000 в месяц).
+Лимиты и запреты — **только в БД** (account), проверяются при резерве цепочкой проверок `reservation/check/*` (порядок `@Order`: счёт списания → идентификация → получатель → лимиты операции → лимиты счёта → деньги):
+- **на вид операции** (`operation_limits`, одинаковы для всех): СБП, по номеру карты, по реквизитам — от 10 ₽, до 1 000 000 ₽ за операцию и 3 000 000 ₽ в месяц; за рубеж — с кошелька (`source = WALLET`, без открытия счёта) 300 000 ₽ за операцию и 400 000 ₽ в месяц, с карт (`CARD`) — 400 000 ₽ и 3 000 000 ₽;
+- **счёта**: «Мой кошелёк» — по уровню идентификации владельца (`identification_limits`); карты — `account_limits` (платёж до 1 000 000, остаток без ограничения, 3 000 000 в месяц); новая привязанная карта получает лимиты из `account_limit_defaults`;
+- **израсходованное** — счётчики `operation_usage` (пользователь × вид × источник × день/месяц) и `account_usage` (оборот счёта за месяц): резерв прибавляет, снятие резерва вычитает; проверка лимита — чтение одной строки;
 - **Кредитная карта** (`accounts.credit`) не пополняет электронные кошельки — ни свой, ни чужой.
+- Справочники лимитов — в кэше Hibernate второго уровня (JCache + Caffeine) и кэше запросов: меняются только миграциями.
 
 ### Уровни идентификации
 
-`account.users.identification_level`, в профиле — `identificationLevel`. Account проверяет при резерве (группу поставщика BILL присылает payment), отказ — `IDENTIFICATION_REQUIRED`.
+`account.users.identification_level`, в профиле — `identificationLevel`. Account проверяет при резерве (группу поставщика BILL присылает payment), отказ — `IDENTIFICATION_REQUIRED`. Лимиты — `identification_limits`, запреты — `identification_restrictions` (уровень, вид операции, группа поставщика, источник, код ошибки из `AccountError`).
 
 | Уровень | Кошелёк: платёж / остаток / в месяц | Недоступно |
 |---|---|---|
@@ -161,9 +163,11 @@ Java-сервисы: Java 21, Spring Boot 4, Maven. Каждый сервис �
 
 - `account.users` — пользователь, телефон, подписка (`NONE`, `PREMIUM`, `BANK_PREMIUM`), `sbp_default_bank_id` — банк по умолчанию для входящих СБП, `default_payment_account_id` — инструмент оплаты по умолчанию, `identification_level` — идентификация владельца кошелька.
 - `account.accounts` — счета: `WALLET` (ровно один у каждого), `CARD` (наш банк) и `EXTERNAL_CARD` (привязанная карта другого банка: `card_last4`, `card_expiry`, `card_fingerprint`); `is_default` — карта для входящих переводов (одна на пользователя). `balance` — реальные деньги, `reserved` — заблокированные под платежи в процессе; доступно = `balance − reserved`.
-- `account.limits` — лимиты пользователя: вид операции × период (`SINGLE`, `DAY`, `MONTH`).
-- `account.account_limits` — лимиты счёта: `max_payment`, `max_balance`, `max_monthly_turnover` (`NULL` — без ограничения).
-- `account.reservations` — резервы под платежи (`RESERVED` → `CAPTURED` / `RELEASED`), `recipient_account_id` — карта нашего получателя. Израсходованный лимит считается по резервам, снятые не считаются.
+- `account.operation_limits` — лимиты на вид операции × источник (`ANY`/`WALLET`/`CARD`) × период (`SINGLE` с минимумом, `DAY`, `MONTH`).
+- `account.identification_limits`, `account.identification_restrictions` — лимиты кошелька и запреты по уровню идентификации.
+- `account.account_limits` — лимиты счёта: `max_payment`, `max_balance`, `max_monthly_turnover` (`NULL` — без ограничения); `account_limit_defaults` — для новых счетов по типу.
+- `account.operation_usage`, `account.account_usage` — счётчики израсходованных лимитов.
+- `account.reservations` — резервы под платежи (`RESERVED` → `CAPTURED` / `RELEASED`), `recipient_account_id` — карта нашего получателя. Израсходованный лимит — в счётчиках, снятые резервы его возвращают.
 - `pricing.commission_rules` — тарифы: вид операции × откуда × куда × подписка → процент, минимум, фикс, подпись для экрана условий; `id` — тариф.
 - `payment.payments` — платежи и их статус; номер карты получателя хранится только маской.
 - `payment.payment_status_history` — каждый шаг саги с пояснением.
@@ -212,6 +216,13 @@ Redis (`localhost:6379`) — блокировки планировщиков, п
 ## Запуск
 
 Java и Node на компьютер ставить не нужно — всё собирается и работает в Docker.
+
+Секреты — в `.env` в корне (в git не попадает): `cp .env.example .env` и заполнить (`openssl rand -base64 32`). Без них compose не запустится.
+
+Тесты: unit — `mvn test` (идут и при сборке образа), интеграционные `*IT` на Testcontainers — `mvn verify`, нужен Docker:
+```bash
+docker run --rm -v "$PWD":/src -v payments-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /src maven:3.9-eclipse-temurin-21 sh -c "mvn -q -B -f libs/platform/pom.xml install -DskipTests && mvn -B -f services/account/pom.xml verify"
+```
 
 ```bash
 docker compose up -d --build   # поднять всё
@@ -295,7 +306,7 @@ Postgres с компьютера: `localhost:5433`, база `payments`, `paymen
 
 ## Округление на пользу и пожертвования
 
-- Настройка — в account (`users.roundup_step` 10/100/1000, `roundup_fund_code`, `roundup_fund_name`): `PUT /api/users/{id}/roundup` `{step, fundCode, fundName}`, `DELETE /api/users/{id}/roundup`; в профиле — `roundup`.
+- Настройка — в account (`users.roundup_step`, `roundup_fund_code`, `roundup_fund_name`; допустимые шаги — `account.roundup.steps`, `GET /api/users/roundup/options`): `PUT /api/users/{id}/roundup` `{step, fundCode, fundName}`, `DELETE /api/users/{id}/roundup`; в профиле — `roundup`.
 - Расчёт — в payment (`web/RoundUp.java`): для `BILL` групп MOBILE, GAMES, UTILITIES, GOV, INTERNET, EDUCATION, SHOPS, TRAVEL, INSURANCE, SECURITY и оплаты по свободным реквизитам — `ceil(сумма/шаг)*шаг − сумма`. Переводы людям, транспорт, кошельки, пожертвования не округляем. Разница — `round_up_amount` / `round_up_fund_*`, входит в `total` и в резерв, уходит в событии `payment.events`. Карты и QR — подключить сюда, когда появятся.
 - Пожертвования (`BILL` группы DONATIONS) не идут в шлюз фонда: после антифрода сразу списание, в событии `charitySettlement: true`.
 - Biller копит (`charity/CharityListener`, группа `biller-charity`) в `charity_accruals` (ROUNDUP / DONATION, уникально по платежу и источнику, день — по Москве). В конце дня (`charity.settle-cron`, 23:55 МСК) — один запрос на фонд в processing `POST /api/processing/charity-transfers` (идемпотентно по settlementId), итог — `charity_settlements`. Вручную: `POST /api/biller/charity/settle?upTo=YYYY-MM-DD`, посмотреть — `GET /api/biller/charity`.

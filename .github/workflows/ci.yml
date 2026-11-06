@@ -130,7 +130,7 @@ jobs:
   # упавшие или отменённые — ошибка
   ci-ok:
     if: always()
-    needs: [changes, platform, service, frontend, dependencies]
+    needs: [changes, platform, service, frontend, dependencies, images]
     runs-on: ubuntu-latest
     steps:
       - name: All checks passed
@@ -138,11 +138,13 @@ jobs:
         run: exit 1
       - run: echo "CI зелёный"
 
-  # Только main, после зелёного CI: образ каждого изменённого сервиса → проверка уязвимостей → GHCR.
-  # Тег — SHA коммита: в кластере будет ровно этот код. Слои Docker — в кэше GitHub Actions.
+  # Образ каждого изменённого сервиса → проверка уязвимостей. В PR — только сборка и проверка: так проверяется
+  # и сам Dockerfile (обновление базового образа, например), тесты Maven его не собирают. В main, после зелёного
+  # CI, — ещё и публикация в GHCR. Тег — SHA коммита: в кластере будет ровно этот код. Слои — в кэше GitHub Actions.
   images:
-    needs: [changes, ci-ok]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.services != '[]'
+    needs: [changes, platform, service, frontend, dependencies]
+    # Пропущенная задача (сервис не менялся) — не причина пропускать образы; упавшая — причина
+    if: always() && !failure() && !cancelled() && needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -156,6 +158,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -180,4 +183,5 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
       - name: Push
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: docker push --all-tags ${{ env.REGISTRY }}/${{ matrix.service }}

@@ -1,5 +1,5 @@
 # Контекст сборки — корень репозитория: сначала общая библиотека libs/platform, потом сервис.
-FROM maven:3.9-eclipse-temurin-21 AS build
+FROM maven:3.9-eclipse-temurin-26 AS build
 WORKDIR /src
 # Сервисы собираются параллельно с общим кэшем ~/.m2 — блокировки файлов, чтобы сборки не мешали друг другу
 ENV MAVEN_ARGS="-Daether.syncContext.named.factory=file-lock -Daether.syncContext.named.nameMapper=file-gav"

@@ -35,7 +35,8 @@ updates:
       actions:
         patterns: ["*"]
 
-  # Базовые образы в Dockerfile (maven, eclipse-temurin, node)
+  # Базовые образы в Dockerfile (maven, eclipse-temurin, node): только обновления внутри мажорной версии.
+  # Переход на новую Java или Node (21 → 25) — осознанное решение вместе с pom.xml и CI, а не автообновление
   - package-ecosystem: docker
     directories:
       - /services/*
@@ -43,6 +44,9 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
     groups:
       docker:
         patterns: ["*"]

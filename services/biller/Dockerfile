@@ -1,5 +1,5 @@
 # Контекст сборки — корень репозитория: сначала общая библиотека libs/platform, потом сервис.
-FROM maven:3.9-eclipse-temurin-21 AS build
+FROM maven:3.9-eclipse-temurin-26 AS build
 WORKDIR /src
 # Сервисы собираются параллельно с общим кэшем ~/.m2 — блокировки файлов, чтобы сборки не мешали друг другу
 ENV MAVEN_ARGS="-Daether.syncContext.named.factory=file-lock -Daether.syncContext.named.nameMapper=file-gav"
@@ -10,7 +10,7 @@ RUN --mount=type=cache,target=/root/.m2 mvn -q -B -f services/biller/pom.xml dep
 COPY services/biller/src services/biller/src
 RUN --mount=type=cache,target=/root/.m2 mvn -q -B -f services/biller/pom.xml package && cp services/biller/target/biller-*.jar /app.jar
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:25-jre
 # Не root: у процесса в контейнере нет лишних прав
 RUN useradd --system --uid 10001 app
 USER app

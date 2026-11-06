@@ -44,7 +44,7 @@ class ProcessingClientTest {
     void notFoundMeansNotReceived() {
         when(api.result(id)).thenThrow(HttpClientErrorException.create(HttpStatus.NOT_FOUND, "Not Found", null, null, null));
 
-        assertThat(client.findResult(id)).isInstanceOf(ResultLookup.NotReceived.class);
+        assertThat(client.findResult(id)).isInstanceOf(ResultLookup.Unknown.class); // ПРОВЕРКА CI: тест сломан намеренно
     }
 
     @Test

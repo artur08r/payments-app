@@ -24,6 +24,12 @@
     </properties>
 
     <dependencies>
+        <!-- ПРОВЕРКА CI: уязвимая версия намеренно (CVE-2022-42889, исправлено в 1.10.0) -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-text</artifactId>
+            <version>1.9</version>
+        </dependency>
         <!-- Общая инфраструктура: outbox, доменные ошибки, DLT, часовой пояс, хэши, блокировки планировщиков -->
         <dependency>
             <groupId>com.paymentsapp</groupId>

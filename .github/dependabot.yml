@@ -1,0 +1,48 @@
+# Dependabot: раз в неделю — PR с обновлениями зависимостей; CI проверяет их как любой другой PR.
+# Мелкие обновления (minor, patch) одной экосистемы — одним PR, мажорные — отдельными: их читать внимательно.
+# Обновления безопасности Dependabot присылает сразу, не дожидаясь расписания.
+version: 2
+updates:
+  - package-ecosystem: maven
+    directories:
+      - /libs/platform
+      - /services/*
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      maven-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor:
+        update-types: [minor, patch]
+
+  # Действия в CI закреплены по SHA — Dependabot обновляет SHA вместе с комментарием версии
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Базовые образы в Dockerfile (maven, eclipse-temurin, node)
+  - package-ecosystem: docker
+    directories:
+      - /services/*
+      - /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      docker:
+        patterns: ["*"]
